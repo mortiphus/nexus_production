@@ -15,6 +15,10 @@ database = "Nexus_Master"
 username = "ReadOnlyUser"
 password = "CHANGE_ME"       # or set the NEXUS_DB_PASSWORD environment variable
 
+[shifts]
+night_start = "23:00"        # the night shift, and the production day, start here
+day_start   = "08:00"        # the day shift runs from here until the next night shift
+
 [orders]
 combo_below_cases = 22     # a product with fewer cases than this ordered today is a combo
 

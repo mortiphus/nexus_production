@@ -1,6 +1,12 @@
-//! The two read-only queries, copied from the Rosehill production dashboard.
-//! The only change is the scan time, which is formatted by the database
-//! (HH:MM:SS) so no date type needs decoding here.
+//! The three read-only queries. Production and Live are the Rosehill
+//! dashboard's queries, History is new.
+//!
+//! "Today" is the production day, which starts when the night shift does (11 PM
+//! by default) and is named for the morning it ends in: pallets built from 11 PM
+//! Monday are for Tuesday's orders. In the SQL, __PROD_DATE__ is that date and
+//! __DAY_START__ is when the production day began; `Queries::new` fills both in.
+//! The scan time in Live is formatted by the database (HH:MM:SS) so no date
+//! type needs decoding here.
 
 pub const PRODUCTION: &str = r#"
 WITH OrderedCTE AS (
@@ -13,7 +19,7 @@ WITH OrderedCTE AS (
         ON o.OrderID = li.OrderID
     JOIN Products p
         ON li.ProductID = p.ProductID
-    WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
+    WHERE CAST(o.EstimatedProductionDate AS DATE) = __PROD_DATE__
     GROUP BY
         p.LocalMaterialID,
         p.CaseDescription
@@ -29,7 +35,7 @@ CompletedCTE AS (
         ON li.OrderID = o.OrderID
     JOIN Products p
         ON li.ProductID = p.ProductID
-    WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
+    WHERE CAST(o.EstimatedProductionDate AS DATE) = __PROD_DATE__
     GROUP BY p.LocalMaterialID
 )
 SELECT
@@ -51,7 +57,7 @@ WITH RecentPallets AS (
         p.OrderID,
         p.LastModified
     FROM dbo.Pallets p
-    WHERE CAST(p.LastModified AS DATE) = CAST(GETDATE() AS DATE)
+    WHERE p.LastModified >= __DAY_START__
     ORDER BY p.LastModified DESC
 ),
 PalletDetail AS (
@@ -130,13 +136,13 @@ WITH OrderedCTE AS (
         ON o.OrderID = li.OrderID
     JOIN Products p
         ON li.ProductID = p.ProductID
-    WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
+    WHERE CAST(o.EstimatedProductionDate AS DATE) = __PROD_DATE__
     GROUP BY p.LocalMaterialID
 )
 SELECT
     pal.PalletID AS PalletID,
     pr.LocalMaterialID AS ProductCode,
-    DATEDIFF(SECOND, CAST(GETDATE() AS DATE), pal.LastModified) AS SecsIntoDay,
+    DATEDIFF(SECOND, __DAY_START__, pal.Created) AS SecsIntoDay,
     ord.CasesOrdered AS ProductOrdered,
     SUM(pc.CaseCount) AS Cases
 FROM dbo.Pallets pal
@@ -150,7 +156,48 @@ JOIN dbo.Products pr
     ON pr.ProductID = li.ProductID
 JOIN OrderedCTE ord
     ON ord.LocalMaterialID = pr.LocalMaterialID
-WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
-GROUP BY pal.PalletID, pal.LastModified, pr.LocalMaterialID, ord.CasesOrdered
-ORDER BY pal.LastModified
+WHERE CAST(o.EstimatedProductionDate AS DATE) = __PROD_DATE__
+GROUP BY pal.PalletID, pal.Created, pr.LocalMaterialID, ord.CasesOrdered
+ORDER BY pal.Created
 "#;
+
+pub struct Queries {
+    pub production: String,
+    pub live: String,
+    pub history: String,
+}
+
+impl Queries {
+    /// `night_start_mins` is when the production day starts, in minutes after
+    /// midnight (1380 for 11 PM).
+    pub fn new(night_start_mins: u32) -> Self {
+        // Minutes to add to now to land on the date the production day is named
+        // for, and to take back off midnight of that date to find its start.
+        let x = (1440 - night_start_mins % 1440) % 1440;
+        let prod_date = format!("CAST(DATEADD(MINUTE, {x}, GETDATE()) AS DATE)");
+        let day_start = format!("DATEADD(MINUTE, -{x}, CAST({prod_date} AS DATETIME))");
+        let fill = |sql: &str| sql.replace("__DAY_START__", &day_start).replace("__PROD_DATE__", &prod_date);
+        Self { production: fill(PRODUCTION), live: fill(LIVE), history: fill(HISTORY) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_11_pm_production_day_is_named_for_the_next_morning() {
+        let q = Queries::new(23 * 60);
+        assert!(q.production.contains("DATEADD(MINUTE, 60, GETDATE())"));
+        assert!(q.history.contains("DATEADD(MINUTE, -60, CAST("));
+        assert!(!q.production.contains("__"));
+        assert!(!q.live.contains("__"));
+        assert!(!q.history.contains("__"));
+    }
+
+    #[test]
+    fn a_midnight_start_is_the_calendar_day() {
+        let q = Queries::new(0);
+        assert!(q.production.contains("DATEADD(MINUTE, 0, GETDATE())"));
+    }
+}

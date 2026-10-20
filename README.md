@@ -6,6 +6,19 @@ It is a standalone port of the two queries in the Rosehill production dashboard,
 
 ## How It Works
 
+## The production day and the shifts
+
+"Today" is the production day, not the calendar date. It starts when the night shift does (11 PM) and is named for the morning it ends in, so pallets built from 11 PM Monday are for Tuesday's orders. This matches Nexus: pallets for an order dated Tuesday are created from Monday 11 PM until about Tuesday 4 PM, with some built a day or more earlier. Nothing resets at midnight.
+
+- Night shift: `night_start` (23:00) to `day_start` (08:00).
+- Day shift: `day_start` until the next `night_start`.
+- Pallets built before the production day started are tagged `pre` ("built ahead").
+- Build time is the pallet's `Created` time. `LastModified` also moves when a pallet is edited or touched later, sometimes hours after it was built.
+
+Each history point carries `shift` (`pre`, `night` or `day`), and its `secs` count from the start of the production day. The file also holds `day_start` (when the production day starts, in seconds after midnight) and `day_shift_at` (when the day shift starts, in seconds into the production day) so the dashboard can turn them into clock times.
+
+## The feeds
+
 - **production.json** (every 20 s): for each product ordered for today, cases ordered, completed and remaining, and pallets remaining. Combos, bulk, frames and backs count one per pallet; everything else is 50 cases to a pallet. Each product is also tagged `is_combo` when fewer than `combo_below_cases` (22) of it are ordered today.
 - **history.json** (every 30 s): one point per pallet and product built for today's orders, with the pallet, the product, when it last changed, its cases and whether they are combos. The dashboard turns these into the cases-completed-through-the-day chart. Pallets built on an earlier day for today's orders come through as negative times and make the chart's starting level.
 - **live.json** (every 10 s): the last five pallets scanned today, with order, customer, product, cases on the pallet and cases remaining on the order.
@@ -16,7 +29,7 @@ It is a standalone port of the two queries in the Rosehill production dashboard,
 
 ## Settings
 
-`/home/pi/nexus.toml` (or `NEXUS_CONFIG`). See `nexus.toml.example` for every key. The database password can instead be set in the `NEXUS_DB_PASSWORD` environment variable.
+`/home/pi/nexus.toml` (or `NEXUS_CONFIG`). See `nexus.toml.example` for every key, including `[shifts]`. The database password can instead be set in the `NEXUS_DB_PASSWORD` environment variable.
 
 It has its own file, not `dashboard.toml`, because saving the dashboard's setup page rewrites `dashboard.toml` and drops sections it does not know, and this file holds a database login.
 

@@ -9,6 +9,8 @@ pub struct Config {
     #[serde(default)]
     pub orders: OrdersCfg,
     #[serde(default)]
+    pub shifts: ShiftsCfg,
+    #[serde(default)]
     pub poll: PollCfg,
     #[serde(default)]
     pub paths: PathsCfg,
@@ -45,6 +47,50 @@ impl Default for DatabaseCfg {
             username: default_username(),
             password: String::new(),
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ShiftsCfg {
+    /// When the night shift, and so the production day, starts ("HH:MM").
+    #[serde(default = "default_night_start")]
+    pub night_start: String,
+    /// When the day shift starts. It runs until the next night shift.
+    #[serde(default = "default_day_start")]
+    pub day_start: String,
+}
+fn default_night_start() -> String { "23:00".to_string() }
+fn default_day_start() -> String { "08:00".to_string() }
+impl Default for ShiftsCfg {
+    fn default() -> Self {
+        Self { night_start: default_night_start(), day_start: default_day_start() }
+    }
+}
+
+/// "23:00" as minutes after midnight, or None if it is not a time.
+pub fn parse_hhmm(text: &str) -> Option<u32> {
+    let (h, m) = text.trim().split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some(h * 60 + m)
+}
+
+impl ShiftsCfg {
+    /// (night start, day start) in minutes after midnight. A time that does not
+    /// parse is reported and replaced by its default.
+    pub fn minutes(&self) -> (u32, u32) {
+        let pick = |text: &str, name: &str, default: u32| {
+            parse_hhmm(text).unwrap_or_else(|| {
+                eprintln!("[shifts] {name} = \"{text}\" is not an HH:MM time — using the default");
+                default
+            })
+        };
+        (pick(&self.night_start, "night_start", 23 * 60), pick(&self.day_start, "day_start", 8 * 60))
+    }
+
+    /// Seconds from the production day's start to the day shift's start.
+    pub fn day_shift_offset_secs(&self) -> i64 {
+        let (night, day) = self.minutes();
+        i64::from((day + 1440 - night) % 1440) * 60
     }
 }
 
@@ -127,5 +173,23 @@ impl Config {
             cfg.database.password = pw;
         }
         cfg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_parse_as_minutes_after_midnight() {
+        assert_eq!(parse_hhmm("23:00"), Some(1380));
+        assert_eq!(parse_hhmm("8:05"), Some(485));
+        assert_eq!(parse_hhmm("24:00"), None);
+        assert_eq!(parse_hhmm("noon"), None);
+    }
+
+    #[test]
+    fn the_day_shift_starts_nine_hours_after_an_11_pm_night_shift() {
+        assert_eq!(ShiftsCfg::default().day_shift_offset_secs(), 9 * 3600);
     }
 }

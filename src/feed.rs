@@ -55,16 +55,30 @@ pub fn production_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
         .collect()
 }
 
+/// Which shift a pallet was built in: "pre" before the production day began
+/// (built ahead of time), "night" until the day shift starts, then "day".
+pub fn shift_of(secs: i64, day_shift_at: i64) -> &'static str {
+    if secs < 0 {
+        "pre"
+    } else if secs < day_shift_at {
+        "night"
+    } else {
+        "day"
+    }
+}
+
 /// One point per pallet and product: when it last changed (seconds since
 /// midnight, negative for an earlier day), the cases on it for today's orders,
 /// and whether they are combos.
-pub fn history_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
+pub fn history_rows(rows: &[Row], combo_below: i64, day_shift_at: i64) -> Vec<Value> {
     rows.iter()
         .map(|r| {
+            let secs = int(r, "SecsIntoDay");
             json!({
                 "pallet": text(r, "PalletID"),
                 "product": text(r, "ProductCode"),
-                "secs": int(r, "SecsIntoDay"),
+                "secs": secs,
+                "shift": shift_of(secs, day_shift_at),
                 "cases": int(r, "Cases"),
                 "combo": int(r, "ProductOrdered") < combo_below,
             })
@@ -98,11 +112,21 @@ pub struct Feed {
     data: Vec<Value>,
     updated: Option<String>,
     updated_epoch: Option<i64>,
+    /// Extra top-level fields for the file, such as when the production day
+    /// starts. The dashboard needs them to turn times into clock times.
+    meta: serde_json::Map<String, Value>,
 }
 
 impl Feed {
     pub fn new() -> Self {
-        Self { data: Vec::new(), updated: None, updated_epoch: None }
+        Self { data: Vec::new(), updated: None, updated_epoch: None, meta: serde_json::Map::new() }
+    }
+
+    pub fn with_meta(mut self, meta: Value) -> Self {
+        if let Value::Object(m) = meta {
+            self.meta = m;
+        }
+        self
     }
 
     pub fn succeeded(&mut self, data: Vec<Value>) {
@@ -113,13 +137,18 @@ impl Feed {
     }
 
     pub fn write(&self, path: &str, error: Option<&str>) -> std::io::Result<()> {
-        let body = json!({
+        let mut body = json!({
             "ok": error.is_none(),
             "error": error,
             "updated": self.updated,
             "updated_epoch": self.updated_epoch,
             "data": self.data,
         });
+        if let Value::Object(b) = &mut body {
+            for (k, v) in &self.meta {
+                b.insert(k.clone(), v.clone());
+            }
+        }
         let tmp = format!("{path}.tmp");
         if let Some(dir) = Path::new(path).parent() {
             std::fs::create_dir_all(dir)?;
@@ -151,12 +180,22 @@ mod tests {
         r.insert("ProductOrdered".into(), json!(300));
         r.insert("PalletID".into(), json!(88123));
         r.insert("ProductCode".into(), json!(1002));
-        let out = history_rows(&[r], 22);
+        let out = history_rows(&[r], 22, 32_400);
         assert_eq!(out[0]["secs"], -3600);
         assert_eq!(out[0]["cases"], 48);
         assert_eq!(out[0]["combo"], false);
         assert_eq!(out[0]["pallet"], 88123);
         assert_eq!(out[0]["product"], 1002);
+        assert_eq!(out[0]["shift"], "pre");
+    }
+
+    #[test]
+    fn pallets_are_tagged_by_the_shift_they_were_built_in() {
+        // Production day starts at 11 PM; the day shift starts nine hours later.
+        assert_eq!(shift_of(-1, 32_400), "pre");
+        assert_eq!(shift_of(0, 32_400), "night");
+        assert_eq!(shift_of(32_399, 32_400), "night");
+        assert_eq!(shift_of(32_400, 32_400), "day");
     }
 
     #[test]

@@ -21,9 +21,12 @@ async fn main() {
     }
     let cfg: &'static config::Config = Box::leak(Box::new(cfg));
 
-    let production = tokio::spawn(poll(cfg, Kind::Production));
-    let live = tokio::spawn(poll(cfg, Kind::Live));
-    let history = tokio::spawn(poll(cfg, Kind::History));
+    let (night_start, _) = cfg.shifts.minutes();
+    let queries: &'static queries::Queries = Box::leak(Box::new(queries::Queries::new(night_start)));
+
+    let production = tokio::spawn(poll(cfg, queries, Kind::Production));
+    let live = tokio::spawn(poll(cfg, queries, Kind::Live));
+    let history = tokio::spawn(poll(cfg, queries, Kind::History));
     // Any task ending is a bug; exit so systemd restarts the service.
     let _ = tokio::join!(production, live, history);
     std::process::exit(1);
@@ -36,17 +39,22 @@ enum Kind {
     History,
 }
 
-async fn poll(cfg: &'static config::Config, kind: Kind) {
+async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, kind: Kind) {
     let (name, secs, sql, path) = match kind {
-        Kind::Production => ("production", cfg.poll.production_secs, queries::PRODUCTION, &cfg.paths.production),
-        Kind::Live => ("live", cfg.poll.live_secs, queries::LIVE, &cfg.paths.live),
-        Kind::History => ("history", cfg.poll.history_secs, queries::HISTORY, &cfg.paths.history),
+        Kind::Production => ("production", cfg.poll.production_secs, &queries.production, &cfg.paths.production),
+        Kind::Live => ("live", cfg.poll.live_secs, &queries.live, &cfg.paths.live),
+        Kind::History => ("history", cfg.poll.history_secs, &queries.history, &cfg.paths.history),
     };
     let limit = Duration::from_secs_f64(cfg.poll.timeout_secs.max(1.0));
     let mut tick = interval(Duration::from_secs_f64(secs.max(1.0)));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-    let mut feed = feed::Feed::new();
+    let (night_start, _) = cfg.shifts.minutes();
+    let day_shift_at = cfg.shifts.day_shift_offset_secs();
+    let mut feed = feed::Feed::new().with_meta(serde_json::json!({
+        "day_start": i64::from(night_start) * 60,
+        "day_shift_at": day_shift_at,
+    }));
     let mut last_error: Option<String> = None;
     loop {
         tick.tick().await;
@@ -55,7 +63,7 @@ async fn poll(cfg: &'static config::Config, kind: Kind) {
                 feed.succeeded(match kind {
                     Kind::Production => feed::production_rows(&rows, cfg.orders.combo_below_cases),
                     Kind::Live => feed::live_rows(&rows),
-                    Kind::History => feed::history_rows(&rows, cfg.orders.combo_below_cases),
+                    Kind::History => feed::history_rows(&rows, cfg.orders.combo_below_cases, day_shift_at),
                 });
                 None
             }
