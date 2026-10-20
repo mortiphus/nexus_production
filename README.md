@@ -15,6 +15,8 @@ It is a standalone port of the two queries in the Rosehill production dashboard,
 - Pallets built before the production day started are tagged `pre` ("built ahead").
 - Build time is the pallet's `Created` time. `LastModified` also moves when a pallet is edited or touched later, sometimes hours after it was built.
 
+Every file also carries `interval_secs`, how often it is rewritten, so the dashboard can tell a slow feed from a stalled one.
+
 Each history point carries `shift` (`pre`, `night` or `day`), and its `secs` count from the start of the production day. The file also holds `day_start` (when the production day starts, in seconds after midnight) and `day_shift_at` (when the day shift starts, in seconds into the production day) so the dashboard can turn them into clock times.
 
 ## The feeds

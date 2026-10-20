@@ -69,6 +69,8 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
     let mut feed = feed::Feed::new().with_meta(serde_json::json!({
         "day_start": i64::from(night_start) * 60,
         "day_shift_at": day_shift_at,
+        // How often this file is rewritten, so the dashboard knows how old is too old.
+        "interval_secs": secs.max(1.0),
     }));
     let mut last_error: Option<String> = None;
     loop {
