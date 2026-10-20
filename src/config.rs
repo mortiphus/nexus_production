@@ -7,6 +7,8 @@ pub struct Config {
     #[serde(default)]
     pub database: DatabaseCfg,
     #[serde(default)]
+    pub orders: OrdersCfg,
+    #[serde(default)]
     pub poll: PollCfg,
     #[serde(default)]
     pub paths: PathsCfg,
@@ -44,6 +46,17 @@ impl Default for DatabaseCfg {
             password: String::new(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OrdersCfg {
+    /// A product with fewer cases than this ordered today counts as a combo.
+    #[serde(default = "default_combo_below")]
+    pub combo_below_cases: i64,
+}
+fn default_combo_below() -> i64 { 22 }
+impl Default for OrdersCfg {
+    fn default() -> Self { Self { combo_below_cases: default_combo_below() } }
 }
 
 #[derive(Debug, Deserialize)]

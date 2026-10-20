@@ -35,7 +35,7 @@ fn pallets_remaining(remaining: i64, description: &str) -> i64 {
     }
 }
 
-pub fn production_rows(rows: &[Row]) -> Vec<Value> {
+pub fn production_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
     rows.iter()
         .map(|r| {
             let ordered = int(r, "CasesOrdered");
@@ -45,6 +45,7 @@ pub fn production_rows(rows: &[Row]) -> Vec<Value> {
             json!({
                 "product_code": text(r, "LocalMaterialID"),
                 "case_description": description,
+                "is_combo": ordered < combo_below,
                 "cases_ordered": ordered,
                 "cases_completed": completed,
                 "cases_remaining": remaining,
@@ -54,11 +55,18 @@ pub fn production_rows(rows: &[Row]) -> Vec<Value> {
         .collect()
 }
 
-/// One point per pallet: when it last changed (seconds since midnight,
-/// negative for an earlier day) and the cases on it for today's orders.
-pub fn history_rows(rows: &[Row]) -> Vec<Value> {
+/// One point per pallet and product size: when it last changed (seconds since
+/// midnight, negative for an earlier day), the cases on it for today's orders,
+/// and whether they are combos.
+pub fn history_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
     rows.iter()
-        .map(|r| json!({ "secs": int(r, "SecsIntoDay"), "cases": int(r, "Cases") }))
+        .map(|r| {
+            json!({
+                "secs": int(r, "SecsIntoDay"),
+                "cases": int(r, "Cases"),
+                "combo": int(r, "ProductOrdered") < combo_below,
+            })
+        })
         .collect()
 }
 
@@ -138,9 +146,23 @@ mod tests {
         let mut r = Row::new();
         r.insert("SecsIntoDay".into(), json!(-3600));
         r.insert("Cases".into(), json!(48));
-        let out = history_rows(&[r]);
+        r.insert("ProductOrdered".into(), json!(300));
+        let out = history_rows(&[r], 22);
         assert_eq!(out[0]["secs"], -3600);
         assert_eq!(out[0]["cases"], 48);
+        assert_eq!(out[0]["combo"], false);
+    }
+
+    #[test]
+    fn a_product_ordered_under_the_limit_is_a_combo() {
+        let mut r = Row::new();
+        r.insert("LocalMaterialID".into(), json!(9));
+        r.insert("CaseDescription".into(), json!("WINGS"));
+        r.insert("CasesOrdered".into(), json!(21));
+        r.insert("CasesCompleted".into(), json!(0));
+        assert_eq!(production_rows(&[r.clone()], 22)[0]["is_combo"], true);
+        r.insert("CasesOrdered".into(), json!(22));
+        assert_eq!(production_rows(&[r], 22)[0]["is_combo"], false);
     }
 
     #[test]
@@ -150,7 +172,7 @@ mod tests {
         r.insert("CaseDescription".into(), json!("WINGS"));
         r.insert("CasesOrdered".into(), json!(100));
         r.insert("CasesCompleted".into(), json!(130));
-        let out = production_rows(&[r]);
+        let out = production_rows(&[r], 22);
         assert_eq!(out[0]["cases_remaining"], 0);
         assert_eq!(out[0]["pallets_remaining"], 0);
     }

@@ -53,9 +53,9 @@ async fn poll(cfg: &'static config::Config, kind: Kind) {
         let error = match db::run_query(&cfg.database, sql, limit).await {
             Ok(rows) => {
                 feed.succeeded(match kind {
-                    Kind::Production => feed::production_rows(&rows),
+                    Kind::Production => feed::production_rows(&rows, cfg.orders.combo_below_cases),
                     Kind::Live => feed::live_rows(&rows),
-                    Kind::History => feed::history_rows(&rows),
+                    Kind::History => feed::history_rows(&rows, cfg.orders.combo_below_cases),
                 });
                 None
             }

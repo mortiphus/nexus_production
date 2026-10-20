@@ -114,22 +114,41 @@ ORDER BY
     pd.LastModified DESC
 "#;
 
-/// Cases built into pallets for today's orders, one row per pallet, with the
-/// time of its last change as seconds since midnight (negative: before
-/// today). It counts the same cases as PRODUCTION's CasesCompleted, so the
-/// running total ends where that figure does.
+/// Cases built into pallets for today's orders, one row per pallet and
+/// product size, with the time of its last change as seconds since midnight
+/// (negative: before today). ProductOrdered is the product's total ordered
+/// today, which decides whether it counts as a combo. It counts the same cases
+/// as PRODUCTION's CasesCompleted, so the running total ends where that
+/// figure does.
 pub const HISTORY: &str = r#"
+WITH OrderedCTE AS (
+    SELECT
+        p.LocalMaterialID,
+        SUM(li.CasesOrdered) AS CasesOrdered
+    FROM Orders o
+    JOIN OrderLineItems li
+        ON o.OrderID = li.OrderID
+    JOIN Products p
+        ON li.ProductID = p.ProductID
+    WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
+    GROUP BY p.LocalMaterialID
+)
 SELECT
-    DATEDIFF(SECOND, CAST(GETDATE() AS DATE), p.LastModified) AS SecsIntoDay,
+    DATEDIFF(SECOND, CAST(GETDATE() AS DATE), pal.LastModified) AS SecsIntoDay,
+    ord.CasesOrdered AS ProductOrdered,
     SUM(pc.CaseCount) AS Cases
-FROM dbo.Pallets p
+FROM dbo.Pallets pal
 JOIN dbo.PalletContents pc
-    ON pc.PalletID = p.PalletID
+    ON pc.PalletID = pal.PalletID
 JOIN dbo.OrderLineItems li
     ON li.LineItemID = pc.LineItemID
 JOIN dbo.Orders o
     ON o.OrderID = li.OrderID
+JOIN dbo.Products pr
+    ON pr.ProductID = li.ProductID
+JOIN OrderedCTE ord
+    ON ord.LocalMaterialID = pr.LocalMaterialID
 WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
-GROUP BY p.PalletID, p.LastModified
-ORDER BY p.LastModified
+GROUP BY pal.PalletID, pal.LastModified, ord.CasesOrdered
+ORDER BY pal.LastModified
 "#;
