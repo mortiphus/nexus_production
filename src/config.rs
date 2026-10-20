@@ -113,12 +113,21 @@ pub struct PollCfg {
     pub live_secs: f64,
     #[serde(default = "default_history_secs")]
     pub history_secs: f64,
+    #[serde(default = "default_orders_secs")]
+    pub orders_secs: f64,
+    #[serde(default = "default_holds_secs")]
+    pub holds_secs: f64,
+    #[serde(default = "default_activity_secs")]
+    pub activity_secs: f64,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: f64,
 }
 fn default_production_secs() -> f64 { 20.0 }
 fn default_live_secs() -> f64 { 10.0 }
 fn default_history_secs() -> f64 { 30.0 }
+fn default_orders_secs() -> f64 { 30.0 }
+fn default_holds_secs() -> f64 { 60.0 }
+fn default_activity_secs() -> f64 { 30.0 }
 fn default_timeout_secs() -> f64 { 10.0 }
 impl Default for PollCfg {
     fn default() -> Self {
@@ -126,6 +135,9 @@ impl Default for PollCfg {
             production_secs: default_production_secs(),
             live_secs: default_live_secs(),
             history_secs: default_history_secs(),
+            orders_secs: default_orders_secs(),
+            holds_secs: default_holds_secs(),
+            activity_secs: default_activity_secs(),
             timeout_secs: default_timeout_secs(),
         }
     }
@@ -139,16 +151,28 @@ pub struct PathsCfg {
     pub live: String,
     #[serde(default = "default_history_path")]
     pub history: String,
+    #[serde(default = "default_orders_path")]
+    pub orders: String,
+    #[serde(default = "default_holds_path")]
+    pub holds: String,
+    #[serde(default = "default_activity_path")]
+    pub activity: String,
 }
 fn default_production_path() -> String { "/home/pi/Git/nexus_production/production.json".to_string() }
 fn default_live_path() -> String { "/home/pi/Git/nexus_production/live.json".to_string() }
 fn default_history_path() -> String { "/home/pi/Git/nexus_production/history.json".to_string() }
+fn default_orders_path() -> String { "/home/pi/Git/nexus_production/orders.json".to_string() }
+fn default_holds_path() -> String { "/home/pi/Git/nexus_production/holds.json".to_string() }
+fn default_activity_path() -> String { "/home/pi/Git/nexus_production/activity.json".to_string() }
 impl Default for PathsCfg {
     fn default() -> Self {
         Self {
             production: default_production_path(),
             live: default_live_path(),
             history: default_history_path(),
+            orders: default_orders_path(),
+            holds: default_holds_path(),
+            activity: default_activity_path(),
         }
     }
 }

@@ -26,9 +26,15 @@ combo_below_cases = 22     # a product with fewer cases than this ordered today 
 production_secs = 20.0       # today's orders against cases completed
 live_secs       = 10.0       # the last pallets scanned
 history_secs    = 30.0       # cases built through the day, for the chart
+orders_secs     = 30.0       # each order against its due time
+holds_secs      = 60.0       # pallets on a quality hold
+activity_secs   = 30.0       # every pallet built, for last-pallet and gap figures
 timeout_secs    = 10.0       # connect + query, per attempt
 
 [paths]
 production = "/home/pi/Git/nexus_production/production.json"
 live       = "/home/pi/Git/nexus_production/live.json"
 history    = "/home/pi/Git/nexus_production/history.json"
+orders     = "/home/pi/Git/nexus_production/orders.json"
+holds      = "/home/pi/Git/nexus_production/holds.json"
+activity   = "/home/pi/Git/nexus_production/activity.json"

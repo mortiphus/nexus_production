@@ -2,3 +2,6 @@
 production.json
 live.json
 history.json
+orders.json
+holds.json
+activity.json

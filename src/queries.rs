@@ -1,12 +1,12 @@
-//! The three read-only queries. Production and Live are the Rosehill
-//! dashboard's queries, History is new.
+//! The read-only queries. Production and Live began as the Rosehill
+//! dashboard's queries (Live now goes by when a pallet was built, not when it
+//! was last touched); History, Orders and Holds are new.
 //!
 //! "Today" is the production day, which starts when the night shift does (11 PM
 //! by default) and is named for the morning it ends in: pallets built from 11 PM
 //! Monday are for Tuesday's orders. In the SQL, __PROD_DATE__ is that date and
 //! __DAY_START__ is when the production day began; `Queries::new` fills both in.
-//! The scan time in Live is formatted by the database (HH:MM:SS) so no date
-//! type needs decoding here.
+//! Times are returned as text or as seconds, so no date type needs decoding.
 
 pub const PRODUCTION: &str = r#"
 WITH OrderedCTE AS (
@@ -55,16 +55,16 @@ WITH RecentPallets AS (
     SELECT TOP 5
         p.PalletID,
         p.OrderID,
-        p.LastModified
+        p.Created
     FROM dbo.Pallets p
-    WHERE p.LastModified >= __DAY_START__
-    ORDER BY p.LastModified DESC
+    WHERE p.Created >= __DAY_START__
+    ORDER BY p.Created DESC
 ),
 PalletDetail AS (
     SELECT
         rp.PalletID,
         rp.OrderID,
-        rp.LastModified,
+        rp.Created,
         pc.LineItemID,
         pc.ProductID,
         SUM(pc.CaseCount) AS CasesOnPallet
@@ -74,7 +74,7 @@ PalletDetail AS (
     GROUP BY
         rp.PalletID,
         rp.OrderID,
-        rp.LastModified,
+        rp.Created,
         pc.LineItemID,
         pc.ProductID
 ),
@@ -95,7 +95,7 @@ SELECT
     o.LocalOrderID,
     c.CustomerName,
     COALESCE(pr_li.LocalProductID, pr_pc.LocalProductID) AS ProductCode,
-    CONVERT(VARCHAR(8), pd.LastModified, 108) AS LastModified,
+    CONVERT(VARCHAR(8), pd.Created, 108) AS BuiltTime,
     pd.CasesOnPallet,
     li.CasesOrdered,
     ISNULL(cb.CasesCompleted, 0) AS CasesCompleted,
@@ -117,7 +117,7 @@ LEFT JOIN dbo.Customers c
 LEFT JOIN CompletedByLineItem cb
     ON cb.LineItemID = pd.LineItemID
 ORDER BY
-    pd.LastModified DESC
+    pd.Created DESC
 "#;
 
 /// Cases built into pallets for today's orders, one row per pallet and
@@ -144,7 +144,9 @@ SELECT
     pr.LocalMaterialID AS ProductCode,
     DATEDIFF(SECOND, __DAY_START__, pal.Created) AS SecsIntoDay,
     ord.CasesOrdered AS ProductOrdered,
-    SUM(pc.CaseCount) AS Cases
+    SUM(pc.CaseCount) AS Cases,
+    SUM(pc.NetWeight) AS NetLb,
+    SUM(pc.LabelWeight) AS LabelLb
 FROM dbo.Pallets pal
 JOIN dbo.PalletContents pc
     ON pc.PalletID = pal.PalletID
@@ -161,10 +163,75 @@ GROUP BY pal.PalletID, pal.Created, pr.LocalMaterialID, ord.CasesOrdered
 ORDER BY pal.Created
 "#;
 
+/// Today's orders, each with its due time (the order's estimated production
+/// time, as seconds since the production day began), cases ordered and cases
+/// built so far. Nexus order status is not kept up to date, so progress comes
+/// from the pallets.
+pub const ORDERS: &str = r#"
+SELECT
+    o.LocalOrderID AS OrderNo,
+    c.CustomerName AS Customer,
+    o.IsTransferOrder AS Transfer,
+    DATEDIFF(SECOND, __DAY_START__, o.EstimatedProductionDate) AS DueSecs,
+    SUM(li.CasesOrdered) AS Ordered,
+    ISNULL((
+        SELECT SUM(pc.CaseCount)
+        FROM dbo.PalletContents pc
+        JOIN dbo.OrderLineItems l2
+            ON l2.LineItemID = pc.LineItemID
+        WHERE l2.OrderID = o.OrderID
+    ), 0) AS Built
+FROM dbo.Orders o
+JOIN dbo.OrderLineItems li
+    ON li.OrderID = o.OrderID
+LEFT JOIN dbo.Customers c
+    ON c.CustomerID = o.CustomerID
+WHERE CAST(o.EstimatedProductionDate AS DATE) = __PROD_DATE__
+GROUP BY o.OrderID, o.LocalOrderID, c.CustomerName, o.IsTransferOrder, o.EstimatedProductionDate
+HAVING SUM(li.CasesOrdered) > 0
+ORDER BY o.EstimatedProductionDate, o.LocalOrderID
+"#;
+
+/// Pallets not shipped and not available for use, by the hold they are on.
+/// Usually empty.
+pub const HOLDS: &str = r#"
+SELECT
+    ps.StatusName AS Hold,
+    COUNT(DISTINCT p.PalletID) AS Pallets,
+    ISNULL(SUM(pc.CaseCount), 0) AS Cases,
+    CONVERT(VARCHAR(16), MIN(p.Created), 120) AS Since
+FROM dbo.Pallets p
+JOIN dbo.PalletStatus ps
+    ON ps.StatusID = p.StatusID
+LEFT JOIN dbo.PalletContents pc
+    ON pc.PalletID = p.PalletID
+WHERE p.StatusID <> 1
+    AND p.IsShipped = 0
+    AND p.IsActive = 1
+GROUP BY ps.StatusName
+ORDER BY Pallets DESC
+"#;
+
+/// Every pallet built in the production day, whether it is for an order or for
+/// inventory. History only has pallets for today's orders; this is what shows
+/// whether the station is busy.
+pub const ACTIVITY: &str = r#"
+SELECT
+    p.PalletID AS PalletID,
+    DATEDIFF(SECOND, __DAY_START__, p.Created) AS SecsIntoDay,
+    CASE WHEN p.OrderID IS NULL THEN 0 ELSE 1 END AS ForOrder
+FROM dbo.Pallets p
+WHERE p.Created >= __DAY_START__
+ORDER BY p.Created
+"#;
+
 pub struct Queries {
     pub production: String,
     pub live: String,
     pub history: String,
+    pub orders: String,
+    pub holds: String,
+    pub activity: String,
 }
 
 impl Queries {
@@ -177,7 +244,14 @@ impl Queries {
         let prod_date = format!("CAST(DATEADD(MINUTE, {x}, GETDATE()) AS DATE)");
         let day_start = format!("DATEADD(MINUTE, -{x}, CAST({prod_date} AS DATETIME))");
         let fill = |sql: &str| sql.replace("__DAY_START__", &day_start).replace("__PROD_DATE__", &prod_date);
-        Self { production: fill(PRODUCTION), live: fill(LIVE), history: fill(HISTORY) }
+        Self {
+            production: fill(PRODUCTION),
+            live: fill(LIVE),
+            history: fill(HISTORY),
+            orders: fill(ORDERS),
+            holds: fill(HOLDS),
+            activity: fill(ACTIVITY),
+        }
     }
 }
 
@@ -193,6 +267,9 @@ mod tests {
         assert!(!q.production.contains("__"));
         assert!(!q.live.contains("__"));
         assert!(!q.history.contains("__"));
+        assert!(!q.orders.contains("__"));
+        assert!(!q.holds.contains("__"));
+        assert!(!q.activity.contains("__"));
     }
 
     #[test]

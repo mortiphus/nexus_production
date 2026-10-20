@@ -27,8 +27,11 @@ async fn main() {
     let production = tokio::spawn(poll(cfg, queries, Kind::Production));
     let live = tokio::spawn(poll(cfg, queries, Kind::Live));
     let history = tokio::spawn(poll(cfg, queries, Kind::History));
+    let orders = tokio::spawn(poll(cfg, queries, Kind::Orders));
+    let holds = tokio::spawn(poll(cfg, queries, Kind::Holds));
+    let activity = tokio::spawn(poll(cfg, queries, Kind::Activity));
     // Any task ending is a bug; exit so systemd restarts the service.
-    let _ = tokio::join!(production, live, history);
+    let _ = tokio::join!(production, live, history, orders, holds, activity);
     std::process::exit(1);
 }
 
@@ -37,6 +40,9 @@ enum Kind {
     Production,
     Live,
     History,
+    Orders,
+    Holds,
+    Activity,
 }
 
 async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, kind: Kind) {
@@ -44,6 +50,9 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
         Kind::Production => ("production", cfg.poll.production_secs, &queries.production, &cfg.paths.production),
         Kind::Live => ("live", cfg.poll.live_secs, &queries.live, &cfg.paths.live),
         Kind::History => ("history", cfg.poll.history_secs, &queries.history, &cfg.paths.history),
+        Kind::Orders => ("orders", cfg.poll.orders_secs, &queries.orders, &cfg.paths.orders),
+        Kind::Holds => ("holds", cfg.poll.holds_secs, &queries.holds, &cfg.paths.holds),
+        Kind::Activity => ("activity", cfg.poll.activity_secs, &queries.activity, &cfg.paths.activity),
     };
     let limit = Duration::from_secs_f64(cfg.poll.timeout_secs.max(1.0));
     let mut tick = interval(Duration::from_secs_f64(secs.max(1.0)));
@@ -64,6 +73,9 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
                     Kind::Production => feed::production_rows(&rows, cfg.orders.combo_below_cases),
                     Kind::Live => feed::live_rows(&rows),
                     Kind::History => feed::history_rows(&rows, cfg.orders.combo_below_cases, day_shift_at),
+                    Kind::Orders => feed::orders_rows(&rows),
+                    Kind::Holds => feed::holds_rows(&rows),
+                    Kind::Activity => feed::activity_rows(&rows, day_shift_at),
                 });
                 None
             }

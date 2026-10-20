@@ -10,6 +10,14 @@ fn int(row: &Row, key: &str) -> i64 {
     }
 }
 
+/// A column as a decimal, 0 when it is missing or NULL.
+fn num(row: &Row, key: &str) -> f64 {
+    match row.get(key) {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
 fn opt_int(row: &Row, key: &str) -> Value {
     match row.get(key) {
         Some(Value::Number(n)) => json!(n.as_i64().or_else(|| n.as_f64().map(|f| f.round() as i64))),
@@ -80,7 +88,54 @@ pub fn history_rows(rows: &[Row], combo_below: i64, day_shift_at: i64) -> Vec<Va
                 "secs": secs,
                 "shift": shift_of(secs, day_shift_at),
                 "cases": int(r, "Cases"),
+                "net_lb": num(r, "NetLb"),
+                "label_lb": num(r, "LabelLb"),
                 "combo": int(r, "ProductOrdered") < combo_below,
+            })
+        })
+        .collect()
+}
+
+/// One row per order for the production day.
+pub fn orders_rows(rows: &[Row]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            json!({
+                "order": text(r, "OrderNo"),
+                "customer": text(r, "Customer"),
+                "transfer": r.get("Transfer").and_then(Value::as_bool).unwrap_or(false),
+                "due_secs": int(r, "DueSecs"),
+                "ordered": int(r, "Ordered"),
+                "built": int(r, "Built"),
+            })
+        })
+        .collect()
+}
+
+/// One row per pallet built in the production day, for orders or inventory.
+pub fn activity_rows(rows: &[Row], day_shift_at: i64) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            let secs = int(r, "SecsIntoDay");
+            json!({
+                "pallet": text(r, "PalletID"),
+                "secs": secs,
+                "shift": shift_of(secs, day_shift_at),
+                "order": int(r, "ForOrder") == 1,
+            })
+        })
+        .collect()
+}
+
+/// One row per hold that has pallets on it.
+pub fn holds_rows(rows: &[Row]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            json!({
+                "hold": text(r, "Hold"),
+                "pallets": int(r, "Pallets"),
+                "cases": int(r, "Cases"),
+                "since": text(r, "Since"),
             })
         })
         .collect()
@@ -95,7 +150,7 @@ pub fn live_rows(rows: &[Row]) -> Vec<Value> {
                 "order_id": text(r, "LocalOrderID"),
                 "customer": text(r, "CustomerName"),
                 "product_code": text(r, "ProductCode"),
-                "last_modified": text(r, "LastModified"),
+                "built_at": text(r, "BuiltTime"),
                 "cases_on_pallet": int(r, "CasesOnPallet"),
                 "cases_ordered": opt_int(r, "CasesOrdered"),
                 "cases_completed": int(r, "CasesCompleted"),
@@ -178,6 +233,8 @@ mod tests {
         r.insert("SecsIntoDay".into(), json!(-3600));
         r.insert("Cases".into(), json!(48));
         r.insert("ProductOrdered".into(), json!(300));
+        r.insert("NetLb".into(), json!(2011.5));
+        r.insert("LabelLb".into(), json!(2000.0));
         r.insert("PalletID".into(), json!(88123));
         r.insert("ProductCode".into(), json!(1002));
         let out = history_rows(&[r], 22, 32_400);
@@ -187,6 +244,34 @@ mod tests {
         assert_eq!(out[0]["pallet"], 88123);
         assert_eq!(out[0]["product"], 1002);
         assert_eq!(out[0]["shift"], "pre");
+        assert_eq!(out[0]["net_lb"], 2011.5);
+        assert_eq!(out[0]["label_lb"], 2000.0);
+    }
+
+    #[test]
+    fn an_order_row_carries_its_due_time_and_progress() {
+        let mut r = Row::new();
+        r.insert("OrderNo".into(), json!("SON1"));
+        r.insert("Customer".into(), json!("Kroger"));
+        r.insert("Transfer".into(), json!(false));
+        r.insert("DueSecs".into(), json!(32_400));
+        r.insert("Ordered".into(), json!(300));
+        r.insert("Built".into(), json!(120));
+        let out = orders_rows(&[r]);
+        assert_eq!(out[0]["due_secs"], 32_400);
+        assert_eq!(out[0]["transfer"], false);
+        assert_eq!(out[0]["built"], 120);
+    }
+
+    #[test]
+    fn activity_marks_inventory_pallets_and_their_shift() {
+        let mut r = Row::new();
+        r.insert("PalletID".into(), json!(7));
+        r.insert("SecsIntoDay".into(), json!(40_000));
+        r.insert("ForOrder".into(), json!(0));
+        let out = activity_rows(&[r], 32_400);
+        assert_eq!(out[0]["order"], false);
+        assert_eq!(out[0]["shift"], "day");
     }
 
     #[test]
