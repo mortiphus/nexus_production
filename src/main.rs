@@ -30,8 +30,10 @@ async fn main() {
     let orders = tokio::spawn(poll(cfg, queries, Kind::Orders));
     let holds = tokio::spawn(poll(cfg, queries, Kind::Holds));
     let activity = tokio::spawn(poll(cfg, queries, Kind::Activity));
+    let pallets = tokio::spawn(poll(cfg, queries, Kind::Pallets));
+    let past_orders = tokio::spawn(poll(cfg, queries, Kind::PastOrders));
     // Any task ending is a bug; exit so systemd restarts the service.
-    let _ = tokio::join!(production, live, history, orders, holds, activity);
+    let _ = tokio::join!(production, live, history, orders, holds, activity, pallets, past_orders);
     std::process::exit(1);
 }
 
@@ -43,6 +45,8 @@ enum Kind {
     Orders,
     Holds,
     Activity,
+    Pallets,
+    PastOrders,
 }
 
 async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, kind: Kind) {
@@ -53,6 +57,8 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
         Kind::Orders => ("orders", cfg.poll.orders_secs, &queries.orders, &cfg.paths.orders),
         Kind::Holds => ("holds", cfg.poll.holds_secs, &queries.holds, &cfg.paths.holds),
         Kind::Activity => ("activity", cfg.poll.activity_secs, &queries.activity, &cfg.paths.activity),
+        Kind::Pallets => ("pallets", cfg.poll.pallets_secs, &queries.pallets, &cfg.paths.pallets),
+        Kind::PastOrders => ("past_orders", cfg.poll.past_orders_secs, &queries.past_orders, &cfg.paths.past_orders),
     };
     let limit = Duration::from_secs_f64(cfg.poll.timeout_secs.max(1.0));
     let mut tick = interval(Duration::from_secs_f64(secs.max(1.0)));
@@ -76,6 +82,8 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
                     Kind::Orders => feed::orders_rows(&rows),
                     Kind::Holds => feed::holds_rows(&rows),
                     Kind::Activity => feed::activity_rows(&rows, day_shift_at),
+                    Kind::Pallets => feed::pallets_rows(&rows, day_shift_at),
+                    Kind::PastOrders => feed::past_orders_rows(&rows),
                 });
                 None
             }

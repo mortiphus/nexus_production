@@ -5,3 +5,5 @@ history.json
 orders.json
 holds.json
 activity.json
+pallets.json
+past_orders.json

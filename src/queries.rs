@@ -225,6 +225,65 @@ WHERE p.Created >= __DAY_START__
 ORDER BY p.Created
 "#;
 
+/// Every pallet built in the production day, one row per pallet and product,
+/// with its weights and how long its cases took. FillSecs runs from the first
+/// case record on the pallet to the last, which is how long the pallet's cases
+/// took to come off the line; LagSecs is from the last case to the pallet being
+/// created. Both are NULL if the pallet has no case records.
+pub const PALLETS: &str = r#"
+SELECT
+    p.PalletID AS PalletID,
+    DATEDIFF(SECOND, __DAY_START__, p.Created) AS SecsIntoDay,
+    pr.LocalMaterialID AS ProductCode,
+    CASE WHEN p.OrderID IS NULL THEN 0 ELSE 1 END AS ForOrder,
+    SUM(pc.CaseCount) AS Cases,
+    SUM(pc.NetWeight) AS NetLb,
+    SUM(pc.LabelWeight) AS LabelLb,
+    (SELECT DATEDIFF(SECOND, MIN(cm.Created), MAX(cm.Created))
+        FROM dbo.CaseManifest cm WHERE cm.PalletID = p.PalletID) AS FillSecs,
+    (SELECT DATEDIFF(SECOND, MAX(cm.Created), p.Created)
+        FROM dbo.CaseManifest cm WHERE cm.PalletID = p.PalletID) AS LagSecs
+FROM dbo.Pallets p
+JOIN dbo.PalletContents pc
+    ON pc.PalletID = p.PalletID
+JOIN dbo.Products pr
+    ON pr.ProductID = pc.ProductID
+WHERE p.Created >= __DAY_START__
+GROUP BY p.PalletID, p.Created, p.OrderID, pr.LocalMaterialID
+ORDER BY p.Created
+"#;
+
+/// The orders of the last 14 production days before today, each with cases
+/// ordered and built, to show how often orders close short and for whom.
+pub const PAST_ORDERS: &str = r#"
+SELECT
+    CONVERT(VARCHAR(10), o.EstimatedProductionDate, 120) AS ProdDate,
+    o.LocalOrderID AS OrderNo,
+    c.CustomerName AS Customer,
+    o.IsTransferOrder AS Transfer,
+    x.ordered AS Ordered,
+    b.built AS Built
+FROM dbo.Orders o
+CROSS APPLY (
+    SELECT SUM(li.CasesOrdered) AS ordered
+    FROM dbo.OrderLineItems li
+    WHERE li.OrderID = o.OrderID
+) x
+CROSS APPLY (
+    SELECT ISNULL(SUM(pc.CaseCount), 0) AS built
+    FROM dbo.PalletContents pc
+    JOIN dbo.OrderLineItems l2
+        ON l2.LineItemID = pc.LineItemID
+    WHERE l2.OrderID = o.OrderID
+) b
+LEFT JOIN dbo.Customers c
+    ON c.CustomerID = o.CustomerID
+WHERE CAST(o.EstimatedProductionDate AS DATE) < __PROD_DATE__
+    AND CAST(o.EstimatedProductionDate AS DATE) >= DATEADD(DAY, -14, __PROD_DATE__)
+    AND x.ordered > 0
+ORDER BY o.EstimatedProductionDate, o.LocalOrderID
+"#;
+
 pub struct Queries {
     pub production: String,
     pub live: String,
@@ -232,6 +291,8 @@ pub struct Queries {
     pub orders: String,
     pub holds: String,
     pub activity: String,
+    pub pallets: String,
+    pub past_orders: String,
 }
 
 impl Queries {
@@ -251,6 +312,8 @@ impl Queries {
             orders: fill(ORDERS),
             holds: fill(HOLDS),
             activity: fill(ACTIVITY),
+            pallets: fill(PALLETS),
+            past_orders: fill(PAST_ORDERS),
         }
     }
 }
@@ -270,6 +333,8 @@ mod tests {
         assert!(!q.orders.contains("__"));
         assert!(!q.holds.contains("__"));
         assert!(!q.activity.contains("__"));
+        assert!(!q.pallets.contains("__"));
+        assert!(!q.past_orders.contains("__"));
     }
 
     #[test]

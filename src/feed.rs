@@ -127,6 +127,43 @@ pub fn activity_rows(rows: &[Row], day_shift_at: i64) -> Vec<Value> {
         .collect()
 }
 
+/// One row per pallet and product built in the production day.
+pub fn pallets_rows(rows: &[Row], day_shift_at: i64) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            let secs = int(r, "SecsIntoDay");
+            json!({
+                "pallet": text(r, "PalletID"),
+                "product": text(r, "ProductCode"),
+                "secs": secs,
+                "shift": shift_of(secs, day_shift_at),
+                "order": int(r, "ForOrder") == 1,
+                "cases": int(r, "Cases"),
+                "net_lb": num(r, "NetLb"),
+                "label_lb": num(r, "LabelLb"),
+                "fill_secs": opt_int(r, "FillSecs"),
+                "lag_secs": opt_int(r, "LagSecs"),
+            })
+        })
+        .collect()
+}
+
+/// One row per order of the last 14 production days.
+pub fn past_orders_rows(rows: &[Row]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| {
+            json!({
+                "date": text(r, "ProdDate"),
+                "order": text(r, "OrderNo"),
+                "customer": text(r, "Customer"),
+                "transfer": r.get("Transfer").and_then(Value::as_bool).unwrap_or(false),
+                "ordered": int(r, "Ordered"),
+                "built": int(r, "Built"),
+            })
+        })
+        .collect()
+}
+
 /// One row per hold that has pallets on it.
 pub fn holds_rows(rows: &[Row]) -> Vec<Value> {
     rows.iter()
@@ -272,6 +309,20 @@ mod tests {
         let out = activity_rows(&[r], 32_400);
         assert_eq!(out[0]["order"], false);
         assert_eq!(out[0]["shift"], "day");
+    }
+
+    #[test]
+    fn a_pallet_without_case_records_has_no_fill_time() {
+        let mut r = Row::new();
+        r.insert("PalletID".into(), json!(9));
+        r.insert("SecsIntoDay".into(), json!(100));
+        r.insert("ForOrder".into(), json!(1));
+        r.insert("Cases".into(), json!(50));
+        r.insert("FillSecs".into(), Value::Null);
+        let out = pallets_rows(&[r.clone()], 32_400);
+        assert!(out[0]["fill_secs"].is_null());
+        r.insert("FillSecs".into(), json!(1500));
+        assert_eq!(pallets_rows(&[r], 32_400)[0]["fill_secs"], 1500);
     }
 
     #[test]

@@ -29,6 +29,8 @@ history_secs    = 30.0       # cases built through the day, for the chart
 orders_secs     = 30.0       # each order against its due time
 holds_secs      = 60.0       # pallets on a quality hold
 activity_secs   = 30.0       # every pallet built, for last-pallet and gap figures
+pallets_secs    = 60.0       # each pallet with its weights and fill time
+past_orders_secs = 300.0     # the last 14 days of orders, for short-order figures
 timeout_secs    = 10.0       # connect + query, per attempt
 
 [paths]
@@ -38,3 +40,5 @@ history    = "/home/pi/Git/nexus_production/history.json"
 orders     = "/home/pi/Git/nexus_production/orders.json"
 holds      = "/home/pi/Git/nexus_production/holds.json"
 activity   = "/home/pi/Git/nexus_production/activity.json"
+pallets    = "/home/pi/Git/nexus_production/pallets.json"
+past_orders = "/home/pi/Git/nexus_production/past_orders.json"
