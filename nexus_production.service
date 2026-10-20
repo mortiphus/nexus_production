@@ -1,0 +1,13 @@
+[Unit]
+Description=Nexus production and live pallet scanning feed
+After=network.target
+
+[Service]
+ExecStart=/home/pi/Git/nexus_production/target/release/nexus_production
+WorkingDirectory=/home/pi/Git/nexus_production
+Restart=always
+RestartSec=5
+User=pi
+
+[Install]
+WantedBy=multi-user.target

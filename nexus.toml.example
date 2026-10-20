@@ -1,0 +1,25 @@
+# nexus.toml — settings for the nexus_production service.
+# Lives at /home/pi/nexus.toml, or wherever NEXUS_CONFIG points.
+#
+# It is separate from dashboard.toml on purpose: saving the dashboard's setup
+# page rewrites dashboard.toml and drops sections it does not know, and this
+# file holds a database login.
+#
+# The login must be a READ-ONLY account. The service only runs SELECT queries.
+
+[database]
+server   = "192.168.1.12"
+instance = "LYNX"            # named instance; remove the line to use port 1433
+port     = 1433              # only used when instance is not set
+database = "Nexus_Master"
+username = "ReadOnlyUser"
+password = "CHANGE_ME"       # or set the NEXUS_DB_PASSWORD environment variable
+
+[poll]
+production_secs = 20.0       # today's orders against cases completed
+live_secs       = 10.0       # the last pallets scanned
+timeout_secs    = 10.0       # connect + query, per attempt
+
+[paths]
+production = "/home/pi/Git/nexus_production/production.json"
+live       = "/home/pi/Git/nexus_production/live.json"
