@@ -115,7 +115,7 @@ ORDER BY
 "#;
 
 /// Cases built into pallets for today's orders, one row per pallet and
-/// product size, with the time of its last change as seconds since midnight
+/// product, with the time of its last change as seconds since midnight
 /// (negative: before today). ProductOrdered is the product's total ordered
 /// today, which decides whether it counts as a combo. It counts the same cases
 /// as PRODUCTION's CasesCompleted, so the running total ends where that
@@ -134,6 +134,8 @@ WITH OrderedCTE AS (
     GROUP BY p.LocalMaterialID
 )
 SELECT
+    pal.PalletID AS PalletID,
+    pr.LocalMaterialID AS ProductCode,
     DATEDIFF(SECOND, CAST(GETDATE() AS DATE), pal.LastModified) AS SecsIntoDay,
     ord.CasesOrdered AS ProductOrdered,
     SUM(pc.CaseCount) AS Cases
@@ -149,6 +151,6 @@ JOIN dbo.Products pr
 JOIN OrderedCTE ord
     ON ord.LocalMaterialID = pr.LocalMaterialID
 WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
-GROUP BY pal.PalletID, pal.LastModified, ord.CasesOrdered
+GROUP BY pal.PalletID, pal.LastModified, pr.LocalMaterialID, ord.CasesOrdered
 ORDER BY pal.LastModified
 "#;

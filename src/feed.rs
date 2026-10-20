@@ -55,13 +55,15 @@ pub fn production_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
         .collect()
 }
 
-/// One point per pallet and product size: when it last changed (seconds since
+/// One point per pallet and product: when it last changed (seconds since
 /// midnight, negative for an earlier day), the cases on it for today's orders,
 /// and whether they are combos.
 pub fn history_rows(rows: &[Row], combo_below: i64) -> Vec<Value> {
     rows.iter()
         .map(|r| {
             json!({
+                "pallet": text(r, "PalletID"),
+                "product": text(r, "ProductCode"),
                 "secs": int(r, "SecsIntoDay"),
                 "cases": int(r, "Cases"),
                 "combo": int(r, "ProductOrdered") < combo_below,
@@ -147,10 +149,14 @@ mod tests {
         r.insert("SecsIntoDay".into(), json!(-3600));
         r.insert("Cases".into(), json!(48));
         r.insert("ProductOrdered".into(), json!(300));
+        r.insert("PalletID".into(), json!(88123));
+        r.insert("ProductCode".into(), json!(1002));
         let out = history_rows(&[r], 22);
         assert_eq!(out[0]["secs"], -3600);
         assert_eq!(out[0]["cases"], 48);
         assert_eq!(out[0]["combo"], false);
+        assert_eq!(out[0]["pallet"], 88123);
+        assert_eq!(out[0]["product"], 1002);
     }
 
     #[test]
