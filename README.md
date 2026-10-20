@@ -1,12 +1,13 @@
 # nexus_production
 
-Today's production and live pallet scanning for the production line monitoring system. A small Rust service for a Raspberry Pi that reads the Nexus SQL Server database and writes two JSON files. The [`websocket_server`](https://github.com/mortiphus/websocket_server) dashboard reads those files and shows them under Second Processing.
+Today's production and live pallet scanning for the production line monitoring system. A small Rust service for a Raspberry Pi that reads the Nexus SQL Server database and writes three JSON files. The [`websocket_server`](https://github.com/mortiphus/websocket_server) dashboard reads those files and shows them under Second Processing.
 
 It is a standalone port of the two queries in the Rosehill production dashboard, written in the same shape as [`bpm`](https://github.com/mortiphus/bpm).
 
 ## How It Works
 
 - **production.json** (every 20 s): for each product ordered for today, cases ordered, completed and remaining, and pallets remaining. Combos, bulk, frames and backs count one per pallet; everything else is 50 cases to a pallet.
+- **history.json** (every 30 s): one point per pallet built for today's orders, with when it last changed and its cases. The dashboard turns these into the cases-completed-through-the-day chart. Pallets built on an earlier day for today's orders come through as negative times and make the chart's starting level.
 - **live.json** (every 10 s): the last five pallets scanned today, with order, customer, product, cases on the pallet and cases remaining on the order.
 - It only runs `SELECT` queries. Use a read-only database login.
 - Each file holds `ok`, `error`, `updated`, `updated_epoch` and `data`. If the database cannot be reached, `data` keeps the last good result and `ok` goes false with the reason, so the dashboard can say the figures are old.

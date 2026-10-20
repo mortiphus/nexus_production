@@ -18,8 +18,10 @@ password = "CHANGE_ME"       # or set the NEXUS_DB_PASSWORD environment variable
 [poll]
 production_secs = 20.0       # today's orders against cases completed
 live_secs       = 10.0       # the last pallets scanned
+history_secs    = 30.0       # cases built through the day, for the chart
 timeout_secs    = 10.0       # connect + query, per attempt
 
 [paths]
 production = "/home/pi/Git/nexus_production/production.json"
 live       = "/home/pi/Git/nexus_production/live.json"
+history    = "/home/pi/Git/nexus_production/history.json"

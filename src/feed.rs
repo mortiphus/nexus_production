@@ -54,6 +54,14 @@ pub fn production_rows(rows: &[Row]) -> Vec<Value> {
         .collect()
 }
 
+/// One point per pallet: when it last changed (seconds since midnight,
+/// negative for an earlier day) and the cases on it for today's orders.
+pub fn history_rows(rows: &[Row]) -> Vec<Value> {
+    rows.iter()
+        .map(|r| json!({ "secs": int(r, "SecsIntoDay"), "cases": int(r, "Cases") }))
+        .collect()
+}
+
 pub fn live_rows(rows: &[Row]) -> Vec<Value> {
     rows.iter()
         .map(|r| {
@@ -123,6 +131,16 @@ mod tests {
         assert_eq!(pallets_remaining(51, "WINGS"), 2);
         assert_eq!(pallets_remaining(7, "Combo Bin"), 7);
         assert_eq!(pallets_remaining(7, "chicken backs"), 7);
+    }
+
+    #[test]
+    fn history_keeps_a_pallets_time_and_cases() {
+        let mut r = Row::new();
+        r.insert("SecsIntoDay".into(), json!(-3600));
+        r.insert("Cases".into(), json!(48));
+        let out = history_rows(&[r]);
+        assert_eq!(out[0]["secs"], -3600);
+        assert_eq!(out[0]["cases"], 48);
     }
 
     #[test]

@@ -23,8 +23,9 @@ async fn main() {
 
     let production = tokio::spawn(poll(cfg, Kind::Production));
     let live = tokio::spawn(poll(cfg, Kind::Live));
-    // Either task ending is a bug; exit so systemd restarts the service.
-    let _ = tokio::join!(production, live);
+    let history = tokio::spawn(poll(cfg, Kind::History));
+    // Any task ending is a bug; exit so systemd restarts the service.
+    let _ = tokio::join!(production, live, history);
     std::process::exit(1);
 }
 
@@ -32,12 +33,14 @@ async fn main() {
 enum Kind {
     Production,
     Live,
+    History,
 }
 
 async fn poll(cfg: &'static config::Config, kind: Kind) {
     let (name, secs, sql, path) = match kind {
         Kind::Production => ("production", cfg.poll.production_secs, queries::PRODUCTION, &cfg.paths.production),
         Kind::Live => ("live", cfg.poll.live_secs, queries::LIVE, &cfg.paths.live),
+        Kind::History => ("history", cfg.poll.history_secs, queries::HISTORY, &cfg.paths.history),
     };
     let limit = Duration::from_secs_f64(cfg.poll.timeout_secs.max(1.0));
     let mut tick = interval(Duration::from_secs_f64(secs.max(1.0)));
@@ -52,6 +55,7 @@ async fn poll(cfg: &'static config::Config, kind: Kind) {
                 feed.succeeded(match kind {
                     Kind::Production => feed::production_rows(&rows),
                     Kind::Live => feed::live_rows(&rows),
+                    Kind::History => feed::history_rows(&rows),
                 });
                 None
             }

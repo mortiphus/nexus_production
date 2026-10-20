@@ -113,3 +113,23 @@ LEFT JOIN CompletedByLineItem cb
 ORDER BY
     pd.LastModified DESC
 "#;
+
+/// Cases built into pallets for today's orders, one row per pallet, with the
+/// time of its last change as seconds since midnight (negative: before
+/// today). It counts the same cases as PRODUCTION's CasesCompleted, so the
+/// running total ends where that figure does.
+pub const HISTORY: &str = r#"
+SELECT
+    DATEDIFF(SECOND, CAST(GETDATE() AS DATE), p.LastModified) AS SecsIntoDay,
+    SUM(pc.CaseCount) AS Cases
+FROM dbo.Pallets p
+JOIN dbo.PalletContents pc
+    ON pc.PalletID = p.PalletID
+JOIN dbo.OrderLineItems li
+    ON li.LineItemID = pc.LineItemID
+JOIN dbo.Orders o
+    ON o.OrderID = li.OrderID
+WHERE CAST(o.EstimatedProductionDate AS DATE) = CAST(GETDATE() AS DATE)
+GROUP BY p.PalletID, p.LastModified
+ORDER BY p.LastModified
+"#;
