@@ -9,13 +9,36 @@ use tokio_util::compat::TokioAsyncWriteCompatExt;
 /// One result row as a JSON object keyed by column name.
 pub type Row = Map<String, Value>;
 
+/// Pause before the one retry, long enough for a deadlock to clear.
+const RETRY_DELAY: Duration = Duration::from_millis(1500);
+
 /// Connects, runs one query and returns its rows. A fresh connection each
 /// time: the queries run every few seconds, and a dropped connection then
-/// costs nothing to recover from.
+/// costs nothing to recover from. A connect failure or a deadlock is tried
+/// once more before it is reported, since both usually clear within seconds
+/// and a reported failure puts "Database unreachable" on the dashboard.
 pub async fn run_query(db: &DatabaseCfg, sql: &str, limit: Duration) -> Result<Vec<Row>, String> {
+    match attempt(db, sql, limit).await {
+        Err(e) if is_transient(&e) => {
+            tokio::time::sleep(RETRY_DELAY).await;
+            attempt(db, sql, limit).await
+        }
+        result => result,
+    }
+}
+
+async fn attempt(db: &DatabaseCfg, sql: &str, limit: Duration) -> Result<Vec<Row>, String> {
     timeout(limit, run(db, sql))
         .await
         .map_err(|_| format!("timed out after {}s", limit.as_secs()))?
+}
+
+/// Errors worth one more try: no connection (SQL Browser timing out while
+/// resolving the instance), a failed login, or this query picked as the
+/// victim of a deadlock. A timeout is not retried; it already took the whole
+/// allowance.
+fn is_transient(error: &str) -> bool {
+    error.starts_with("connect:") || error.starts_with("login:") || error.contains("deadlock victim")
 }
 
 async fn run(db: &DatabaseCfg, sql: &str) -> Result<Vec<Row>, String> {
@@ -79,5 +102,26 @@ fn to_json(data: ColumnData<'_>) -> Value {
             }
         }),
         _ => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient;
+
+    #[test]
+    fn a_sql_browser_timeout_is_retried() {
+        assert!(is_transient("connect: Conversion error: SQL browser timeout during resolving instance LYNX."));
+    }
+
+    #[test]
+    fn a_deadlock_victim_is_retried() {
+        assert!(is_transient("query: Token error: 'Transaction (Process ID 94) was deadlocked on lock resources with another process and has been chosen as the deadlock victim. Rerun the transaction.' on server X"));
+    }
+
+    #[test]
+    fn a_timeout_or_bad_sql_is_not_retried() {
+        assert!(!is_transient("timed out after 10s"));
+        assert!(!is_transient("query: Token error: 'Invalid column name' on server X"));
     }
 }
