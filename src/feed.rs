@@ -232,6 +232,7 @@ impl Feed {
         let mut body = json!({
             "ok": error.is_none(),
             "error": error,
+            "error_kind": error.map(crate::db::error_kind),
             "updated": self.updated,
             "updated_epoch": self.updated_epoch,
             "data": self.data,

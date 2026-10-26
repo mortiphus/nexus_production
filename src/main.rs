@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::{MissedTickBehavior, interval};
 
 mod config;
 mod db;
 mod feed;
 mod queries;
+mod stats;
 
 // ========================================
 // Name: nexus_production (version in Cargo.toml, stamped by build.rs)
@@ -37,6 +38,11 @@ async fn main() {
     std::process::exit(1);
 }
 
+/// How often a feed that is still failing says so again in the journal.
+const REMIND_EVERY: Duration = Duration::from_secs(600);
+/// How often each feed logs how long its queries have been taking.
+const SUMMARY_EVERY: Duration = Duration::from_secs(3600);
+
 #[derive(Clone, Copy)]
 enum Kind {
     Production,
@@ -60,7 +66,7 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
         Kind::Pallets => ("pallets", cfg.poll.pallets_secs, &queries.pallets, &cfg.paths.pallets),
         Kind::PastOrders => ("past_orders", cfg.poll.past_orders_secs, &queries.past_orders, &cfg.paths.past_orders),
     };
-    let limit = Duration::from_secs_f64(cfg.poll.timeout_secs.max(1.0));
+    let limits = db::Limits { connect: cfg.poll.connect_timeout(), query: cfg.poll.query_timeout(name) };
     let mut tick = interval(Duration::from_secs_f64(secs.max(1.0)));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -73,9 +79,31 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
         "interval_secs": secs.max(1.0),
     }));
     let mut last_error: Option<String> = None;
+    let mut failing_since = Instant::now();
+    let mut last_logged = Instant::now();
+    let mut was_slow = false;
+    let mut stats = stats::PollStats::new(Instant::now());
     loop {
         tick.tick().await;
-        let error = match db::run_query(&cfg.database, sql, limit).await {
+        let started = Instant::now();
+        let result = db::run_query(&cfg.database, sql, limits).await;
+        let elapsed = started.elapsed();
+        stats.record(elapsed);
+        if result.is_ok() {
+            let slow = stats::is_slow(elapsed, limits.query);
+            if slow != was_slow {
+                if slow {
+                    eprintln!("{name}: slow query, {:.1}s of the {}s allowed", elapsed.as_secs_f64(), limits.query.as_secs_f64());
+                } else {
+                    println!("{name}: query back to normal speed, {:.1}s", elapsed.as_secs_f64());
+                }
+                was_slow = slow;
+            }
+        }
+        if let Some(line) = stats.summary(Instant::now(), SUMMARY_EVERY) {
+            println!("{name}: last hour: {line}");
+        }
+        let error = match result {
             Ok(rows) => {
                 feed.succeeded(match kind {
                     Kind::Production => feed::production_rows(&rows, cfg.orders.combo_below_cases),
@@ -91,13 +119,26 @@ async fn poll(cfg: &'static config::Config, queries: &'static queries::Queries, 
             }
             Err(e) => Some(e),
         };
-        // Report a change, not every failed attempt.
+        // Report a change, not every failed attempt, and a reminder every so
+        // often while it lasts so the journal shows how long it has gone on.
         if error != last_error {
             match &error {
-                Some(e) => eprintln!("{name}: {e}"),
-                None => println!("{name}: database reachable again"),
+                Some(e) => {
+                    eprintln!("{name}: {e}");
+                    failing_since = Instant::now();
+                    last_logged = Instant::now();
+                }
+                None => println!(
+                    "{name}: database reachable again after {} min",
+                    failing_since.elapsed().as_secs() / 60
+                ),
             }
             last_error = error.clone();
+        } else if let Some(e) = &error {
+            if last_logged.elapsed() >= REMIND_EVERY {
+                eprintln!("{name}: still failing after {} min: {e}", failing_since.elapsed().as_secs() / 60);
+                last_logged = Instant::now();
+            }
         }
         if let Err(e) = feed.write(path, error.as_deref()) {
             eprintln!("{name}: cannot write {path}: {e}");

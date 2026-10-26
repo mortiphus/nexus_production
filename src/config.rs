@@ -1,4 +1,6 @@
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::time::Duration;
 
 const CONFIG_PATH: &str = "/home/pi/nexus.toml";
 
@@ -123,8 +125,36 @@ pub struct PollCfg {
     pub pallets_secs: f64,
     #[serde(default = "default_past_orders_secs")]
     pub past_orders_secs: f64,
+    /// How long a query may run, per attempt. Feeds with a heavier query get
+    /// at least `HEAVY_QUERY_SECS` (see `query_timeout`).
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: f64,
+    /// How long connecting and logging in may take, per attempt.
+    #[serde(default = "default_connect_timeout_secs")]
+    pub connect_timeout_secs: f64,
+    /// A query limit for one feed by name (`[poll.query_timeout_secs]`,
+    /// `pallets = 45`), in place of `timeout_secs`.
+    #[serde(default)]
+    pub query_timeout_secs: HashMap<String, f64>,
+}
+/// Feeds whose queries read the large case and pallet tables, and so get more
+/// time than the light ones unless nexus.toml says otherwise.
+const HEAVY_FEEDS: [&str; 2] = ["pallets", "past_orders"];
+const HEAVY_QUERY_SECS: f64 = 30.0;
+impl PollCfg {
+    /// The most a feed's query may run before it is reported as timed out.
+    pub fn query_timeout(&self, feed: &str) -> Duration {
+        let secs = match self.query_timeout_secs.get(feed) {
+            Some(secs) => *secs,
+            None if HEAVY_FEEDS.contains(&feed) => self.timeout_secs.max(HEAVY_QUERY_SECS),
+            None => self.timeout_secs,
+        };
+        Duration::from_secs_f64(secs.max(1.0))
+    }
+
+    pub fn connect_timeout(&self) -> Duration {
+        Duration::from_secs_f64(self.connect_timeout_secs.max(1.0))
+    }
 }
 fn default_production_secs() -> f64 { 20.0 }
 fn default_live_secs() -> f64 { 10.0 }
@@ -135,6 +165,7 @@ fn default_activity_secs() -> f64 { 30.0 }
 fn default_pallets_secs() -> f64 { 60.0 }
 fn default_past_orders_secs() -> f64 { 300.0 }
 fn default_timeout_secs() -> f64 { 10.0 }
+fn default_connect_timeout_secs() -> f64 { 10.0 }
 impl Default for PollCfg {
     fn default() -> Self {
         Self {
@@ -147,6 +178,8 @@ impl Default for PollCfg {
             pallets_secs: default_pallets_secs(),
             past_orders_secs: default_past_orders_secs(),
             timeout_secs: default_timeout_secs(),
+            connect_timeout_secs: default_connect_timeout_secs(),
+            query_timeout_secs: HashMap::new(),
         }
     }
 }
@@ -231,5 +264,22 @@ mod tests {
     #[test]
     fn the_day_shift_starts_nine_hours_after_an_11_pm_night_shift() {
         assert_eq!(ShiftsCfg::default().day_shift_offset_secs(), 9 * 3600);
+    }
+
+    #[test]
+    fn heavy_feeds_get_more_time_than_light_ones() {
+        let poll = PollCfg::default();
+        assert_eq!(poll.query_timeout("live"), Duration::from_secs(10));
+        assert_eq!(poll.query_timeout("pallets"), Duration::from_secs(30));
+        assert_eq!(poll.query_timeout("past_orders"), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_feed_named_in_the_config_uses_its_own_limit() {
+        let poll: PollCfg = toml::from_str("timeout_secs = 5\n[query_timeout_secs]\npallets = 45\nlive = 2").unwrap();
+        assert_eq!(poll.query_timeout("pallets"), Duration::from_secs(45));
+        assert_eq!(poll.query_timeout("live"), Duration::from_secs(2));
+        assert_eq!(poll.query_timeout("orders"), Duration::from_secs(5));
+        assert_eq!(poll.query_timeout("past_orders"), Duration::from_secs(30));
     }
 }

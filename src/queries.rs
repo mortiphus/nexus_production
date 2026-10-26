@@ -229,7 +229,9 @@ ORDER BY p.Created
 /// with its weights and how long its cases took. FillSecs runs from the first
 /// case record on the pallet to the last, which is how long the pallet's cases
 /// took to come off the line; LagSecs is from the last case to the pallet being
-/// created. Both are NULL if the pallet has no case records.
+/// created. Both are NULL if the pallet has no case records. The case records
+/// are read in one pass for today's pallets: a subquery per pallet scanned the
+/// whole CaseManifest table each time and outgrew the 10 second timeout.
 pub const PALLETS: &str = r#"
 SELECT
     p.PalletID AS PalletID,
@@ -239,17 +241,21 @@ SELECT
     SUM(pc.CaseCount) AS Cases,
     SUM(pc.NetWeight) AS NetLb,
     SUM(pc.LabelWeight) AS LabelLb,
-    (SELECT DATEDIFF(SECOND, MIN(cm.Created), MAX(cm.Created))
-        FROM dbo.CaseManifest cm WHERE cm.PalletID = p.PalletID) AS FillSecs,
-    (SELECT DATEDIFF(SECOND, MAX(cm.Created), p.Created)
-        FROM dbo.CaseManifest cm WHERE cm.PalletID = p.PalletID) AS LagSecs
+    DATEDIFF(SECOND, m.FirstCase, m.LastCase) AS FillSecs,
+    DATEDIFF(SECOND, m.LastCase, p.Created) AS LagSecs
 FROM dbo.Pallets p
 JOIN dbo.PalletContents pc
     ON pc.PalletID = p.PalletID
 JOIN dbo.Products pr
     ON pr.ProductID = pc.ProductID
+LEFT JOIN (
+    SELECT cm.PalletID, MIN(cm.Created) AS FirstCase, MAX(cm.Created) AS LastCase
+    FROM dbo.CaseManifest cm
+    WHERE cm.PalletID IN (SELECT PalletID FROM dbo.Pallets WHERE Created >= __DAY_START__)
+    GROUP BY cm.PalletID
+) m ON m.PalletID = p.PalletID
 WHERE p.Created >= __DAY_START__
-GROUP BY p.PalletID, p.Created, p.OrderID, pr.LocalMaterialID
+GROUP BY p.PalletID, p.Created, p.OrderID, pr.LocalMaterialID, m.FirstCase, m.LastCase
 ORDER BY p.Created
 "#;
 
