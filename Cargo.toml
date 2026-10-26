@@ -1,6 +1,6 @@
 [package]
 name = "nexus_production"
-version = "26.10.26"
+version = "26.10.26+1"
 edition = "2024"
 
 [dependencies]

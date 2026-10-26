@@ -31,7 +31,12 @@ holds_secs      = 60.0       # pallets on a quality hold
 activity_secs   = 30.0       # every pallet built, for last-pallet and gap figures
 pallets_secs    = 60.0       # each pallet with its weights and fill time
 past_orders_secs = 300.0     # the last 14 days of orders, for short-order figures
-timeout_secs    = 10.0       # connect + query, per attempt
+timeout_secs    = 10.0       # a query, per attempt (pallets and past_orders get at least 30)
+connect_timeout_secs = 10.0  # connecting and logging in, per attempt
+
+# A limit for one feed by name, in place of timeout_secs:
+# [poll.query_timeout_secs]
+# pallets = 45.0
 
 [paths]
 production = "/home/pi/Git/nexus_production/production.json"

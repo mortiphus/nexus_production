@@ -12,36 +12,53 @@ pub type Row = Map<String, Value>;
 /// Pause before the one retry, long enough for a deadlock to clear.
 const RETRY_DELAY: Duration = Duration::from_millis(1500);
 
+/// How long to wait for the connection (including login) and for the query
+/// itself, each on its own, so a slow query is never mistaken for a database
+/// that cannot be reached.
+#[derive(Clone, Copy)]
+pub struct Limits {
+    pub connect: Duration,
+    pub query: Duration,
+}
+
+/// What kind of failure an error message describes: "unreachable" (no
+/// connection or login), "timeout" (connected, but the query took too long) or
+/// "query" (the database refused or failed the query). The dashboard words its
+/// status from this.
+pub fn error_kind(error: &str) -> &'static str {
+    if error.starts_with("connect:") || error.starts_with("login:") {
+        "unreachable"
+    } else if error.starts_with("query timed out") {
+        "timeout"
+    } else {
+        "query"
+    }
+}
+
 /// Connects, runs one query and returns its rows. A fresh connection each
 /// time: the queries run every few seconds, and a dropped connection then
 /// costs nothing to recover from. A connect failure or a deadlock is tried
 /// once more before it is reported, since both usually clear within seconds
 /// and a reported failure puts "Database unreachable" on the dashboard.
-pub async fn run_query(db: &DatabaseCfg, sql: &str, limit: Duration) -> Result<Vec<Row>, String> {
-    match attempt(db, sql, limit).await {
+pub async fn run_query(db: &DatabaseCfg, sql: &str, limits: Limits) -> Result<Vec<Row>, String> {
+    match run(db, sql, limits).await {
         Err(e) if is_transient(&e) => {
             tokio::time::sleep(RETRY_DELAY).await;
-            attempt(db, sql, limit).await
+            run(db, sql, limits).await
         }
         result => result,
     }
 }
 
-async fn attempt(db: &DatabaseCfg, sql: &str, limit: Duration) -> Result<Vec<Row>, String> {
-    timeout(limit, run(db, sql))
-        .await
-        .map_err(|_| format!("timed out after {}s", limit.as_secs()))?
-}
-
 /// Errors worth one more try: no connection (SQL Browser timing out while
 /// resolving the instance), a failed login, or this query picked as the
-/// victim of a deadlock. A timeout is not retried; it already took the whole
-/// allowance.
+/// victim of a deadlock. A query timeout is not retried; it already took the
+/// whole allowance.
 fn is_transient(error: &str) -> bool {
     error.starts_with("connect:") || error.starts_with("login:") || error.contains("deadlock victim")
 }
 
-async fn run(db: &DatabaseCfg, sql: &str) -> Result<Vec<Row>, String> {
+async fn run(db: &DatabaseCfg, sql: &str, limits: Limits) -> Result<Vec<Row>, String> {
     let mut cfg = Config::new();
     cfg.host(&db.server);
     match &db.instance {
@@ -54,19 +71,25 @@ async fn run(db: &DatabaseCfg, sql: &str) -> Result<Vec<Row>, String> {
     cfg.encryption(EncryptionLevel::NotSupported);
     cfg.trust_cert();
 
-    let tcp = TcpStream::connect_named(&cfg).await.map_err(|e| format!("connect: {e}"))?;
-    tcp.set_nodelay(true).ok();
-    let mut client = Client::connect(cfg, tcp.compat_write())
-        .await
-        .map_err(|e| format!("login: {e}"))?;
+    let mut client = timeout(limits.connect, async {
+        let tcp = TcpStream::connect_named(&cfg).await.map_err(|e| format!("connect: {e}"))?;
+        tcp.set_nodelay(true).ok();
+        Client::connect(cfg, tcp.compat_write()).await.map_err(|e| format!("login: {e}"))
+    })
+    .await
+    .map_err(|_| format!("connect: timed out after {}s", limits.connect.as_secs_f64()))??;
 
-    let rows = client
-        .simple_query(sql)
-        .await
-        .map_err(|e| format!("query: {e}"))?
-        .into_first_result()
-        .await
-        .map_err(|e| format!("query: {e}"))?;
+    let rows = timeout(limits.query, async {
+        client
+            .simple_query(sql)
+            .await
+            .map_err(|e| format!("query: {e}"))?
+            .into_first_result()
+            .await
+            .map_err(|e| format!("query: {e}"))
+    })
+    .await
+    .map_err(|_| format!("query timed out after {}s", limits.query.as_secs_f64()))??;
 
     Ok(rows
         .into_iter()
@@ -107,7 +130,7 @@ fn to_json(data: ColumnData<'_>) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::is_transient;
+    use super::{error_kind, is_transient};
 
     #[test]
     fn a_sql_browser_timeout_is_retried() {
@@ -121,7 +144,21 @@ mod tests {
 
     #[test]
     fn a_timeout_or_bad_sql_is_not_retried() {
-        assert!(!is_transient("timed out after 10s"));
+        assert!(!is_transient("query timed out after 10s"));
         assert!(!is_transient("query: Token error: 'Invalid column name' on server X"));
+    }
+
+    #[test]
+    fn errors_are_sorted_into_unreachable_timeout_and_query() {
+        assert_eq!(error_kind("connect: refused"), "unreachable");
+        assert_eq!(error_kind("connect: timed out after 10s"), "unreachable");
+        assert_eq!(error_kind("login: Login failed for user"), "unreachable");
+        assert_eq!(error_kind("query timed out after 10s"), "timeout");
+        assert_eq!(error_kind("query: Token error: 'Invalid column name'"), "query");
+    }
+
+    #[test]
+    fn a_connect_timeout_is_retried() {
+        assert!(is_transient("connect: timed out after 10s"));
     }
 }
